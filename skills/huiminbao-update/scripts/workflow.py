@@ -10,6 +10,7 @@ from pathlib import Path
 import platform
 import posixpath
 import re
+import subprocess
 import sys
 import tempfile
 from urllib.parse import parse_qsl, urlsplit
@@ -336,18 +337,43 @@ def apply_plan(workbook, plan_path, output, log_path):
     return report
 
 
+def package_files(root):
+    """Files a publish would include: git-visible files when root is a repository, else every file."""
+    try:
+        out = subprocess.run(["git", "-C", str(root), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+                             capture_output=True, check=True).stdout
+        return [root / p.decode("utf-8") for p in out.split(b"\0") if p]
+    except (OSError, subprocess.CalledProcessError):
+        return [p for p in root.rglob("*") if ".git" not in p.relative_to(root).parts]
+
+
+def reviewed_gate_dll(path):
+    """The activation-gate DLL is the one binary allowed: it must match GATE_VERSION of its C source."""
+    source = path.with_name("focus_gate.c")
+    if path.parent.name != "wechat" or not source.is_file():
+        return False
+    m = re.search(r"#define GATE_VERSION (\d+)", source.read_text(encoding="utf-8"))
+    return bool(m) and path.name == "focus_gate_v%s.dll" % m.group(1)
+
+
 def scan_package(root):
     root = Path(root).resolve()
     findings = []
-    blocked = {".xlsx", ".xlsm", ".xls", ".png", ".jpg", ".jpeg", ".dll", ".lib", ".pem", ".key", ".log", ".zip"}
-    for path in sorted(root.rglob("*")):
-        if not path.is_file() or ".git" in path.relative_to(root).parts or "__pycache__" in path.parts:
+    blocked = {".xlsx", ".xlsm", ".xls", ".png", ".jpg", ".jpeg", ".dll", ".lib", ".pdb", ".pem", ".key", ".log", ".zip"}
+    for path in sorted(package_files(root)):
+        if not path.is_file() or "__pycache__" in path.parts:
             continue
         rel = str(path.relative_to(root))
+        if path.suffix.lower() == ".dll" and reviewed_gate_dll(path):
+            continue
         if path.suffix.lower() in blocked:
             findings.append({"file": rel, "issue": "Private data/binary extension"})
             continue
-        text = path.read_text(encoding="utf-8-sig")
+        try:
+            text = path.read_text(encoding="utf-8-sig")
+        except UnicodeDecodeError:
+            findings.append({"file": rel, "issue": "Unreviewed binary file"})
+            continue
         if re.search(r"(?i)(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})", text):
             findings.append({"file": rel, "issue": "Possible access token"})
         if re.search(r"(?i)[A-Z]:[\\/]+Users[\\/]+(?!<|示例|YOUR_)[^\\/\s\"']+", text):

@@ -116,8 +116,12 @@ def ps(script, *args):
     if result.returncode: raise RuntimeError(sanitize((result.stderr or result.stdout).strip())[:1000])
     return sanitize(result.stdout.strip())
 
+def foreground_is_wechat():
+    fg=u.GetForegroundWindow()
+    return bool(fg) and process(fg)[1].lower() in ALLOWED
+
 @contextmanager
-def guard(h):
+def guard(h, settle=4.0):
     handle=k.CreateMutexW(None,False,'Local\\WeChatBackgroundControl-'+str(h))
     if not handle: raise RuntimeError('Unable to acquire window lock')
     held=False
@@ -127,12 +131,19 @@ def guard(h):
         held=True
         state=inspect(h)
         if state['foreground']: raise RuntimeError('The target is in the foreground; no input was sent')
+        if foreground_is_wechat(): raise RuntimeError('The user is working in WeChat; no input was sent')
         if state['minimized']: raise RuntimeError('Target is minimized; no automatic restore or input performed')
         if state['process'].lower() not in {'wechatappex.exe','weixinappex.exe','wechatapp.exe'}:
             raise RuntimeError('Only independent research windows are supported, never the main chat window')
-        yield state
-        time.sleep(.15)
-        if inspect(h)['foreground']: raise RuntimeError('Target activated itself; stop and observe. Do not repeat the action')
+        import focus_gate
+        gate=focus_gate.ActivationGate()
+        with gate:
+            yield state
+            # WeChat may activate a window seconds after the action returns.
+            time.sleep(settle)
+        state['activation_gate']=gate.report
+        if gate.report.get('user_foreground_disturbed') or inspect(h)['foreground']:
+            raise RuntimeError('The user foreground was disturbed despite the gate; stop and report. Gate: '+json.dumps(gate.report))
     finally:
         if held: k.ReleaseMutex(handle)
         k.CloseHandle(handle)
@@ -147,6 +158,28 @@ def xy(x,y):
 def char_units(text):
     raw=text.encode('utf-16-le')
     return [int.from_bytes(raw[i:i+2],'little') for i in range(0,len(raw),2)]
+
+KEYS={'enter':13,'esc':27,'pgdn':34,'pgup':33,'end':35,'home':36,'down':40,'up':38}
+
+def check_text(value):
+    if not value or len(value)>1000: raise ValueError('Expected 1..1000 characters')
+    if any(x in value for x in ('\r','\n','\t')): raise ValueError('Use text only; submit with a separately verified key action')
+
+def press(target,vk):
+    post(target,0x100,vk,1); post(target,0x101,vk,0xC0000001)
+
+def click_at(target,x,y):
+    post(target,0x200,0,xy(x,y)); post(target,0x201,1,xy(x,y)); time.sleep(.06); post(target,0x202,0,xy(x,y))
+
+def surface_at(h,state,sx,sy):
+    """Window that should receive a posted mouse message at screen point (sx, sy) and the client point."""
+    for child in state['children']:
+        r=child['rect']
+        if child['class']=='Chrome_RenderWidgetHostHWND' and r[0]<=sx<r[2] and r[1]<=sy<r[3] and u.IsWindowVisible(child['hwnd']):
+            return child['hwnd'],sx-r[0],sy-r[1]
+    ox,oy=state['client_origin_screen']; cr=state['client_rect']
+    if not(0<=sx-ox<cr[2] and 0<=sy-oy<cr[3]): raise ValueError('Point is outside the selected window; scroll it into view first')
+    return h,sx-ox,sy-oy
 
 def capture(h,path):
     state=inspect(h)
@@ -164,8 +197,9 @@ def main():
     p.add_argument('--name',default='*'); p.add_argument('--type',default=''); p.add_argument('--exact',action='store_true')
     p.add_argument('--index',type=int); p.add_argument('--value',default='')
     p.add_argument('--x',type=int); p.add_argument('--y',type=int); p.add_argument('--frame',choices=['client','window'],default='client')
-    p.add_argument('--by',type=float,default=0); p.add_argument('--set',type=float,default=-1)
-    p.add_argument('--key',choices=['enter','esc','pgdn','pgup','end','home'])
+    p.add_argument('--by',type=int,default=0); p.add_argument('--set',type=float,default=-1)
+    p.add_argument('--key',choices=sorted(KEYS))
+    p.add_argument('--settle',type=float,default=4.0,help='Seconds the activation gate stays on after the action')
     a=p.parse_args()
     if a.index is not None and a.index<0: p.error('--index cannot be negative')
     if a.command=='windows': return windows()
@@ -185,15 +219,58 @@ def main():
     params=['-Hwnd',a.hwnd,'-Name',a.name,'-Type',a.type]
     if a.exact: params+=['-Exact']
     if a.command=='find': return {'controls':ps('act.ps1',*params,'-Action','find')}
-    with guard(a.hwnd) as state:
+    if not 1<=a.settle<=30: p.error('--settle must be 1..30 seconds')
+    with guard(a.hwnd,a.settle) as state:
         if a.command in ('invoke','setvalue','scrollinto'):
             matches=ps('act.ps1',*params,'-Action','find')
-            count=len([line for line in matches.splitlines() if re.match(r'^\d+ ',line)])
-            if a.index is None and count!=1: raise RuntimeError('Expected one control, found %d; inspect matches and set --index'%count)
-            result=ps('act.ps1',*params,'-Action',a.command,'-Index',a.index or 0,'-Value',a.value)
+            lines=[line for line in matches.splitlines() if re.match(r'^\d+ ',line)]
+            if a.index is None and len(lines)!=1: raise RuntimeError('Expected one control, found %d; inspect matches and set --index'%len(lines))
+            if a.command in ('invoke','setvalue'):
+                # UIA Invoke and ValuePattern let WeChat empty the system foreground for a
+                # moment, so controls are clicked and typed into with posted messages instead.
+                if (a.index or 0)>=len(lines): raise RuntimeError('No control at --index')
+                line=lines[a.index or 0]
+                def centre(text):
+                    m=re.search(r' rect=(-?[\d.]+),(-?[\d.]+),([\d.]+),([\d.]+)',text)
+                    if not m: return None
+                    x,y,w,hh=map(float,m.groups())
+                    try: return surface_at(a.hwnd,state,int(x+w/2),int(y+hh/2))
+                    except ValueError: return None
+                hit=centre(line)
+                if not hit and 'ScrollItem' in line:
+                    # ScrollItem did not disturb the foreground in tests; bring the control into view.
+                    ps('act.ps1',*params,'-Action','scrollinto','-Index',a.index or 0); time.sleep(.6)
+                    again=[l for l in ps('act.ps1',*params,'-Action','find').splitlines() if re.match(r'^\d+ ',l)]
+                    if len(again)==len(lines): line=again[a.index or 0]; hit=centre(line)
+                if not hit: raise RuntimeError('Control is not on screen inside the selected window')
+                target,cx,cy=hit
+                if a.command=='setvalue':
+                    if ' Edit ' not in line: raise RuntimeError('setvalue needs an Edit control')
+                    if target==a.hwnd:
+                        raise RuntimeError('This box is in the window toolbar, which only accepts typing while WeChat is in the foreground. '
+                                           'Use a search box inside the page (account page magnifier or the search results page)')
+                    check_text(a.value)
+                    old=line.split(' value=',1)[1] if ' value=' in line else ''
+                    click_at(target,cx,cy); time.sleep(.2)
+                    press(target,35)
+                    for _ in range(len(old)+2): press(target,8); time.sleep(.005)
+                    for unit in char_units(a.value): post(target,0x102,unit,1); time.sleep(.01)
+                    result='typed into control via window messages; verify the value with find'
+                else:
+                    click_at(target,cx,cy)
+                    result='clicked control centre via window messages'
+            else:
+                result=ps('act.ps1',*params,'-Action',a.command,'-Index',a.index or 0,'-Value',a.value)
         elif a.command=='scroll':
-            if a.set!=-1 and not 0<=a.set<=100: raise ValueError('--set must be 0..100')
-            result=ps('sp.ps1','-Hwnd',a.hwnd,'-Set',a.set,'-By',a.by)
+            # UIA ScrollPattern empties the foreground briefly and Chromium ignores posted wheel
+            # messages, so pages are scrolled with posted PageDown/PageUp keys.
+            if a.set!=-1: raise ValueError('--set relied on UIA ScrollPattern; use --by pages (positive scrolls down) or key home/end')
+            pages=int(a.by)
+            if pages==0 or abs(pages)>30: raise ValueError('--by must be a non-zero whole number of pages, at most 30')
+            cr=state['window_rect']
+            target,_,_=surface_at(a.hwnd,state,(cr[0]+cr[2])//2,(cr[1]+cr[3])//2)
+            for _ in range(abs(pages)): press(target,34 if pages>0 else 33); time.sleep(.05)
+            result='posted %d page keys'%pages
         else:
             target=a.target or a.hwnd
             if target!=a.hwnd and not u.IsChild(a.hwnd,target): raise ValueError('Target must be an observed child of selected window')
@@ -205,17 +282,16 @@ def main():
                     x+=state['window_rect'][0]-origin.x; y+=state['window_rect'][1]-origin.y
                 bounds=rect(target,True)
                 if not(bounds[0]<=x<bounds[2] and bounds[1]<=y<bounds[3]): raise ValueError('Click is outside target client area')
-                post(target,0x200,0,xy(x,y)); post(target,0x201,1,xy(x,y)); time.sleep(.06); post(target,0x202,0,xy(x,y))
+                click_at(target,x,y)
             elif a.command=='chars':
-                if not a.value or len(a.value)>1000: raise ValueError('Expected 1..1000 characters')
-                if any(x in a.value for x in ('\r','\n','\t')): raise ValueError('Use text only; submit with a separately verified key action')
+                check_text(a.value)
                 for unit in char_units(a.value): post(target,0x102,unit,1); time.sleep(.01)
             elif a.command=='key':
                 if not a.key: p.error('--key required')
-                vk={'enter':13,'esc':27,'pgdn':34,'pgup':33,'end':35,'home':36}[a.key]
-                post(target,0x100,vk,1); post(target,0x101,vk,0xC0000001)
+                press(target,KEYS[a.key])
             result='posted to selected window only'
-    return {'operation':a.command,'result':result,'next':'Re-read or capture the window to verify the effect'}
+    return {'operation':a.command,'result':result,'activation_gate':state.get('activation_gate'),
+            'next':'Re-read or capture the window to verify the effect'}
 
 if __name__=='__main__':
     try: print(json.dumps({'ok':True,'data':main()},ensure_ascii=False))

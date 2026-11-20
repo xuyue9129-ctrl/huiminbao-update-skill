@@ -4,7 +4,20 @@
 
 只针对用户授权的公开产品资料。先观察已有独立研究窗口，不能把微信主聊天窗口作为输入目标。用户未允许客户端导航时，仅用官方公开网页与已有证据。不要为了完成采集，擅自点击登录、头像昵称、医保信息、投保声明或支付授权。
 
-优先当前环境已提供的专用工具；没有微信专用工具时，可使用本skill的Windows辅助脚本。它通过UI Automation、窗口定向PostMessage和PrintWindow实现有限读取/导航。**不需要手机/虚拟机，不等于任意版本都能用。**
+优先当前环境已提供的专用工具；没有微信专用工具时，可使用本skill的Windows辅助脚本。它通过UI Automation读取、窗口定向PostMessage操作、PrintWindow截图。**不需要手机/虚拟机，不等于任意版本都能用。**
+
+### 前台拦截器（用户继续使用其他软件）
+
+所有导航命令（click/invoke/setvalue/scroll/scrollinto/chars/key）自动在动作前后开启 `scripts/wechat/focus_gate.py`，动作结束后再保持 `--settle` 秒（默认4秒）：
+
+- 在本会话所有微信进程的线程上挂 WH_CBT 钩子，加载 `focus_gate_v<N>.dll`。微信内的 SetForegroundWindow、SwitchToThisWindow、BringWindowToTop，以及会激活其他顶层窗口的 SetActiveWindow/SetFocus/SetWindowPos 在拦截期间被拒绝；CBT 再拦截剩余的窗口激活。
+- 暂占 F22 热键并调用 LockSetForegroundWindow，堵住 Chromium 模拟按键取得前台权限的途径。
+- 拦截期间新出现的微信窗口（例如打开的小程序）立即放到 z 序最底并移到屏幕右侧边缘，只留 16 像素，避免盖住用户窗口。
+- 用户本人按住 Alt/Win，或在微信窗口/任务栏上按下鼠标时放行，不阻止用户自己切到微信。用户正在使用微信时，导航命令直接拒绝。
+- 拦截器随命令进程退出而卸载；DLL 超过 3 秒无心跳即失效。DLL 留在微信进程内直到微信重启，但失效时只是透传调用。
+- 每次返回 `activation_gate` 报告。`user_foreground_disturbed=true` 表示前台曾被清空或切到微信，命令会以错误退出：停止该类操作并记录，不要重试。
+
+加载 DLL 属于向微信进程注入代码，存在被微信安全机制识别的风险；首次在某台电脑使用前必须取得用户同意。DLL 由同目录 `focus_gate.c` 用 `build_focus_gate.ps1`（`pip install ziglang`）构建。修改 C 源码必须同时提高 `GATE_VERSION` 和 `focus_gate.py` 的 `DLL_NAME`，因为已加载的旧 DLL 无法覆盖。
 
 ```powershell
 $python = (Get-Command python -ErrorAction Stop).Source
@@ -23,7 +36,9 @@ $wx = Join-Path $skill 'scripts/wechat/control.py'
 2. `inspect --hwnd H`核对进程、标题、窗口尺寸、前台/最小化状态、子窗口。`H`是本次返回值，不是示例可直接运行的字面量。
 3. `read`保存UIA文档；先确认是搜索页、账号主页、文章还是小程序，不能只因文本很多就算正文。
 4. `find`获取当前控件、类型、支持模式和矩形。匹配多项须明确`--index`，索引从0开始。
-5. 优先`setvalue/invoke/scrollinto/scroll`；只有截图和控件定位明确时才用`click`。不支持的控件记录阻塞，不盲发连续输入。
+5. `invoke`对UIA控件矩形中心投递点击；`setvalue`点击Edit后用投递按键清空再逐字输入（UIA Invoke/Value 会让微信短暂清空系统前台，已弃用）；`scroll --by N`投递N次翻页键（正数向下）；`scrollinto`用UIA ScrollItem（实测不扰动前台）。截图和控件定位明确时才用`click`。不支持的控件记录阻塞，不盲发连续输入。
+   - 控件不在可视区时，`invoke/setvalue`自动先用ScrollItem滚到可视区再点击。
+   - 窗口顶部工具栏（后退按钮、顶部搜索框）只在微信处于前台时响应，投递消息无效，UIA又会扰动前台，所以不支持。返回上一页用页面内链接，例如文章底部的公众号名称回到主页。工具栏搜索框`setvalue`会直接拒绝。改用页面内搜索框：公众号主页右上放大镜、搜一搜窗口、搜索结果页顶部输入框。
 6. 每次动作后再`inspect`及`read/capture`确认；辅助工具短时前台检查可能漏掉延迟激活，后续观察仍必须做。
 
 ```powershell
@@ -35,6 +50,8 @@ $wx = Join-Path $skill 'scripts/wechat/control.py'
 & $python -X utf8 $wx setvalue --hwnd $h --name '*' --type Edit --index 0 --value '示例市民保2028'
 & $python -X utf8 $wx find --hwnd $h --name '搜索' --type Button --exact
 & $python -X utf8 $wx invoke --hwnd $h --name '搜索' --type Button --exact
+# 页面内搜索框也可用 key --key enter，--target 为本次inspect得到的 Chrome_RenderWidgetHostHWND
+& $python -X utf8 $wx scroll --hwnd $h --by 2
 & $python -X utf8 $wx inspect --hwnd $h
 & $python -X utf8 $wx read --hwnd $h --out (Join-Path $evidence 'search-result.txt')
 ```
@@ -71,11 +88,11 @@ $wx = Join-Path $skill 'scripts/wechat/control.py'
 
 | 现象 | 处理 |
 | --- | --- |
-| 前台窗口是目标或动作后自行激活 | 停止输入，记录动作/页面；不置顶、不强行切回、不换全局键鼠 |
-| 要求绝不打断用户，但新页面导航会激活 | 只处理已读内容，交付兼容性阻塞，不承诺全自动 |
+| 命令报错`user_foreground_disturbed`或目标处于前台 | 停止该类操作，记录动作/页面与报告；不置顶、不换全局键鼠、不重试 |
+| 拦截器无法启动（缺DLL、非64位Python、另一拦截正在运行） | 不做任何导航；只读取/截图，或串行等待 |
 | 验证码、登录或昵称头像/医保授权 | 请用户处理或明确授权，不绕过、不代填 |
 | 同窗口由其他Agent操作 | 单一操作员串行，窗口消息互斥只能覆盖单次调用，不保证整个任务互斥 |
 | 标题有2028但正文没取得 | 记为“当年线索，正文未读”，不新增参数 |
 | 旧结果残留/账号不匹配 | 重读核验，不从错误产品抽取 |
 
-历史上UIA Invoke、滚动和搜索Enter都曾触发微信自行激活；窗口消息点击有后台成功个例，也有失败。包内辅助不带进程注入、原生钩子或焦点恢复模块，不能保证导航不抢焦点。
+未启用拦截器时，UIA Invoke、UIA滚动、搜索Enter和文章跳转都曾触发微信自行激活。启用拦截器后的实测范围见[验证记录](validation.md)；未覆盖的页面类型首次使用仍需检查每次报告。小程序窗口能打开且不抢前台，但实测一个小程序页面截图为空白、UIA仅有AppIndex，其内容是否可后台读取需逐个确认。

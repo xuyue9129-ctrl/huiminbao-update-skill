@@ -20,5 +20,7 @@ screenshots/
 *.pem
 *.key
 *.dll
+!skills/huiminbao-update/scripts/wechat/focus_gate_v6.dll
 *.lib
+*.pdb
 *.zip

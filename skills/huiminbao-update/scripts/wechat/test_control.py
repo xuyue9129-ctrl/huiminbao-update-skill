@@ -38,6 +38,25 @@ class BackgroundTests(unittest.TestCase):
         with patch.object(b.u,'IsWindow',return_value=True),patch.object(b,'process',return_value=(1,'notepad.exe')):
             with self.assertRaisesRegex(ValueError,'WeChat'): b.inspect(456789)
 
+    def test_surface_prefers_render_widget_and_rejects_outside_points(self):
+        state={'children':[{'hwnd':11,'class':'Chrome_RenderWidgetHostHWND','rect':[100,200,500,900]}],
+               'client_origin_screen':[90,150],'client_rect':[0,0,420,760]}
+        with patch.object(b.u,'IsWindowVisible',return_value=True):
+            self.assertEqual(b.surface_at(5,state,150,250),(11,50,50))
+            self.assertEqual(b.surface_at(5,state,95,160),(5,5,10))
+            with self.assertRaisesRegex(ValueError,'outside'): b.surface_at(5,state,2000,250)
+
+    def test_guard_refuses_when_user_is_in_wechat(self):
+        with patch.object(b,'inspect',return_value={'foreground':False,'minimized':False,'process':'WeChatAppEx.exe'}), \
+             patch.object(b,'foreground_is_wechat',return_value=True):
+            with self.assertRaisesRegex(RuntimeError,'working in WeChat'):
+                with b.guard(987654321): self.fail('Must not act while the user is in WeChat')
+
+    def test_text_checks(self):
+        b.check_text('惠民保2028')
+        for bad in ('', 'a\nb', 'x'*1001):
+            with self.assertRaises(ValueError): b.check_text(bad)
+
     def test_hidden_edit_receives_unicode_without_focus(self):
         b.sig(b.u,'CreateWindowExW',[W.DWORD,W.LPCWSTR,W.LPCWSTR,W.DWORD,C.c_int,C.c_int,C.c_int,C.c_int,W.HWND,W.HMENU,W.HINSTANCE,C.c_void_p],W.HWND)
         b.sig(b.u,'DestroyWindow',[W.HWND],W.BOOL)

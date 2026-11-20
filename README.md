@@ -41,14 +41,15 @@
 | `references/recovery.md` | 检查点、恢复、并发、常见失败 |
 | `scripts/workflow.py` | 初始化批次、环境检查、证据校验、工作簿只读检查与受控补丁 |
 | `scripts/recalculate.py` | 用独立Excel实例重算临时副本，提取真实缓存，不改正式文件 |
-| `scripts/wechat/control.py` | Windows窗口定向UIA/消息/截图辅助入口 |
+| `scripts/wechat/control.py` | Windows窗口定向UIA/消息/截图辅助入口，导航时自动启用前台拦截器 |
+| `scripts/wechat/focus_gate.py`、`focus_gate.c`、`focus_gate_v6.dll` | 前台拦截器：Agent操作微信时不抢用户前台；DLL可用`build_focus_gate.ps1`从源码重建 |
 | `scripts/test_workflow.py` | 合成文件回归测试，不连接微信、不操作真实工作簿 |
 | `scripts/test_recalculate.py` | 显式开启的Excel集成测试，只创建临时合成工作簿 |
 
 ## 环境与快速检查
 
 - 通用脚本：Python 3.10+，`openpyxl>=3.1,<4`、`lxml>=5,<7`。
-- 微信辅助：Windows、已登录微信、PowerShell 5.1、`Pillow>=10,<13`。
+- 微信辅助：Windows x64、64位Python、已登录微信、PowerShell 5.1、`Pillow>=10,<13`。重建DLL需`ziglang`（可选）。
 - Excel重算：Windows桌面版Excel及`pywin32>=306`，可使用单独安装了pywin32的Python。
 - 不自动安装依赖；遵循目标工作区依赖与安装授权。
 
@@ -56,6 +57,7 @@
 python -X utf8 .factory/skills/huiminbao-update/scripts/workflow.py preflight
 python -X utf8 .factory/skills/huiminbao-update/scripts/test_workflow.py
 python -X utf8 .factory/skills/huiminbao-update/scripts/wechat/test_control.py
+python -X utf8 .factory/skills/huiminbao-update/scripts/wechat/test_focus_gate.py
 ```
 
 可选的真实Excel重算测试（关闭本测试新建的独立Excel实例，不操作已有工作簿）：
@@ -66,7 +68,7 @@ python -X utf8 .factory/skills/huiminbao-update/scripts/test_recalculate.py
 Remove-Item Env:HMB_TEST_EXCEL
 ```
 
-微信自测只使用不可见测试控件；通过不代表所有微信版本/小程序都能导航。真实页面必须逐次观察验证。后台模式不调用全局键鼠，但微信自身仍可能激活窗口；出现一次即停止该类导航，不强制切回、不反复尝试。
+微信自测只使用不可见测试控件；真实页面必须逐次观察验证。导航命令自动启用前台拦截器：向微信进程加载拦截DLL，拒绝微信在后台操作期间抢前台，用户可继续使用其他软件。本机实测公众号导航、页内搜索、小程序打开均为前台零变化，详见验证记录。加载DLL存在被微信风控识别的风险，首次使用前须用户同意；命令报告前台受扰时停止该类操作，不重试。
 
 ## 重要限制
 
