@@ -1,0 +1,43 @@
+{
+  "product_id": "demo-city-cover",
+  "product": "示例市民保（虚构示例）",
+  "target_year": 2028,
+  "year_basis": {
+    "kind": "named_year",
+    "quote": "示例市民保2028版现已开放参保。",
+    "source_id": "demo-official"
+  },
+  "sources": [
+    {
+      "id": "demo-official",
+      "kind": "official_account",
+      "official": true,
+      "official_reason": "仅作数据格式示例，真实任务需核验账号认证主体及官方产品关系。",
+      "title": "示例市民保2028产品说明（虚构）",
+      "url": "https://example.invalid/product",
+      "published_at": null,
+      "accessed_at": "2027-11-01T10:00:00+08:00",
+      "file": "evidence/demo-city-cover/product.txt"
+    }
+  ],
+  "decisions": [
+    {
+      "action": "set",
+      "col": "Q",
+      "old": null,
+      "value": 120,
+      "reason": "虚构示例中的官方价格。",
+      "quote": "示例市民保2028版每人每年120元。",
+      "source_id": "demo-official"
+    },
+    {
+      "action": "not_found",
+      "col": "BX",
+      "reason": "未取得当年服务机构明细，不沿用去年。"
+    }
+  ],
+  "notes": [
+    "这是虚构格式示例，不可直接作为实际更新依据。",
+    "validate-evidence会要求所引本地文件真实存在。"
+  ]
+}
