@@ -21,7 +21,7 @@
 
 ```powershell
 $python = (Get-Command python -ErrorAction Stop).Source
-$skill = (Resolve-Path '.factory/skills/huiminbao-update').Path
+$skill = '<skill目录>'  # 替换为 huiminbao-update 目录的绝对路径
 $wx = Join-Path $skill 'scripts/wechat/control.py'
 & $python -X utf8 $wx windows
 ```
@@ -74,12 +74,12 @@ $wx = Join-Path $skill 'scripts/wechat/control.py'
 3. 只读：保障详情、投保须知、保险条款、责任免除、既往症约定、药械目录、理赔流程、承保与服务机构。
 4. 画布无UIA文字时用`capture`，视实际需要定向滚动并截连续区段。每段保留重叠区域和序号，避免漏行。当前截图为黑屏、停渲染、无变化时标记不可读。
 5. 进入投保页若要求勾选协议、领取授权、输入身份证/手机号或生成订单，立即停下。产品研究不等于允许提交这些动作。
-6. `#小程序://...`仅是分享描述，不能直接传给FetchUrl，更不能猜私有接口。取不到公开信息就记录页面/字段缺失。
+6. `#小程序://...`仅是分享描述，不能直接交给网页抓取工具，更不能猜私有接口。取不到公开信息就记录页面/字段缺失。
 
 ## 文章内链H5
 
 1. 从已验证官方文章保存锚点文字与目标URL，建立`官方账号 → 文章 → 产品H5`链。
-2. 提取链接时先删除会话参数，再用FetchUrl。禁止传出`exportkey/pass_ticket/uin/wxtoken/access_token`等凭据，也不要把完整原始链接打印到日志。
+2. 提取链接时先删除会话参数，再用网页抓取工具读取。禁止传出`exportkey/pass_ticket/uin/wxtoken/access_token`等凭据，也不要把完整原始链接打印到日志。
 3. 官方内链可以是技术/经纪公司域名，不能仅用`.gov.cn`判定；反过来，普通第三方域名不能靠“页面看起来像投保页”认定官方。
 4. 仅GET公开说明页，不猜创建订单、支付、授权确认URL，不调用表单提交API。跳转到验证码或登录则停。
 5. H5的年度、主体、保障期间与正文再核对，保留冲突。入口日期和正式发布日不同，区分“开放投保日”“发布日”，不要机械二选一。

@@ -6,20 +6,16 @@
 
 ## 安装
 
-将本仓库 `skills/huiminbao-update` 整个目录复制到目标工作区：
+本仓库只依赖通用的 `SKILL.md` 格式，不绑定任何特定 Agent。把 `skills/huiminbao-update` 整个目录（含 `SKILL.md`、`references/`、`scripts/`、`examples/`）复制到你所用 Agent 读取 skill 的位置：
 
-```text
-你的工作区/
-  .factory/
-    skills/
-      huiminbao-update/
-        SKILL.md
-        references/
-        scripts/
-        examples/
-```
+| 使用方式 | 放置位置（示例） |
+| --- | --- |
+| 支持 SKILL.md 自动发现的 Agent | 该 Agent 文档规定的 skills 目录，例如 Claude Code 的 `<工作区>/.claude/skills/huiminbao-update/`、Codex 的 `~/.codex/skills/huiminbao-update/` |
+| 不支持自动发现的 Agent | 任意位置均可，例如 `<工作区>/skills/huiminbao-update/`，然后在对话里让 Agent 先完整阅读该目录下的 `SKILL.md` |
 
-然后启动新会话，在 `/skills` 确认已启用，输入：
+下文用 `<skill目录>` 表示复制后的 `huiminbao-update` 目录绝对路径。脚本只用相对自身的路径，放在哪里都能运行。
+
+启动新会话后输入（不支持斜杠命令的 Agent 去掉第一行，改为“请先阅读 <skill目录>/SKILL.md 并按其执行”）：
 
 ```text
 /huiminbao-update
@@ -28,7 +24,7 @@
 先核查我指定的产品，不自动发布文件或操作投保。
 ```
 
-其他支持 SKILL.md 的 Agent 可使用其对应 skills 目录；不支持自动发现的 Agent 直接读取 `SKILL.md` 及其中引用文件。项目规则与用户当次授权始终优先。
+项目规则与用户当次授权始终优先于本skill。
 
 ## 包含什么
 
@@ -54,17 +50,18 @@
 - 不自动安装依赖；遵循目标工作区依赖与安装授权。
 
 ```powershell
-python -X utf8 .factory/skills/huiminbao-update/scripts/workflow.py preflight
-python -X utf8 .factory/skills/huiminbao-update/scripts/test_workflow.py
-python -X utf8 .factory/skills/huiminbao-update/scripts/wechat/test_control.py
-python -X utf8 .factory/skills/huiminbao-update/scripts/wechat/test_focus_gate.py
+$skill = 'D:\path\to\huiminbao-update'   # 改成 <skill目录> 的实际路径
+python -X utf8 "$skill/scripts/workflow.py" preflight
+python -X utf8 "$skill/scripts/test_workflow.py"
+python -X utf8 "$skill/scripts/wechat/test_control.py"
+python -X utf8 "$skill/scripts/wechat/test_focus_gate.py"
 ```
 
 可选的真实Excel重算测试（关闭本测试新建的独立Excel实例，不操作已有工作簿）：
 
 ```powershell
 $env:HMB_TEST_EXCEL='1'
-python -X utf8 .factory/skills/huiminbao-update/scripts/test_recalculate.py
+python -X utf8 "$skill/scripts/test_recalculate.py"
 Remove-Item Env:HMB_TEST_EXCEL
 ```
 
@@ -81,5 +78,3 @@ Remove-Item Env:HMB_TEST_EXCEL
 ## 发布安全
 
 公开仓库只保留通用脚本、说明和虚构示例。证据、截图、工作簿和运行进度默认放在仓库外的实际工作区，且被`.gitignore`排除。发布前执行`workflow.py scan-package`并人工复核全部拟发布文件。扫描是辅助，不是无泄露保证。
-
-Factory skill规范：<https://docs.factory.com/harness/skills.md>。
